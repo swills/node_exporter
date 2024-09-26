@@ -11,19 +11,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build (freebsd || dragonfly) && !nomeminfo
+//go:build (freebsd || dragonfly) && !nomeminfo && cgo
 // +build freebsd dragonfly
 // +build !nomeminfo
+// +build cgo
 
 package collector
 
+import "C"
 import (
 	"fmt"
 	"log/slog"
+	"strconv"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sys/unix"
 )
+
+// #cgo LDFLAGS: -lmemstat
+// #include <sys/types.h>
+// #include <memstat.h>
+import "C"
 
 const (
 	memorySubsystem = "memory"
@@ -178,5 +186,164 @@ func (c *memoryCollector) Update(ch chan<- prometheus.Metric) error {
 			nil, nil,
 		), prometheus.GaugeValue, float64(swapUsed*c.pageSize))
 
+	updateUMAZoneStats(ch)
+	updateUMAMallocStats(ch)
+
 	return nil
+}
+
+// see https://man.freebsd.org/cgi/man.cgi?libmemstat
+
+func updateUMAMallocStats(ch chan<- prometheus.Metric) {
+	// analogous to `vmstat -m --libxo json`
+	var r C.int
+
+	mtlp := C.memstat_mtl_alloc()
+	if mtlp == nil {
+		return
+	}
+
+	r = C.memstat_sysctl_malloc(mtlp, 0)
+	if r < 0 {
+		return
+	}
+
+	umaMemoryLabelNames := []string{"type"}
+
+	for mtp := C.memstat_mtl_first(mtlp); mtp != nil; {
+		memstatType := C.GoString(C.memstat_get_name(mtp))
+		memstatInUse := uint64(C.memstat_get_count(mtp))
+		memstatBytes := uint64(C.memstat_get_bytes(mtp))
+		memstatAllocs := uint64(C.memstat_get_numallocs(mtp))
+
+		ch <- prometheus.MustNewConstMetric(
+			prometheus.NewDesc(
+				prometheus.BuildFQName(namespace, memorySubsystem, "uma_malloc_in_use"),
+				"in use",
+				umaMemoryLabelNames, nil,
+			), prometheus.GaugeValue,
+			float64(memstatInUse), memstatType,
+		)
+
+		ch <- prometheus.MustNewConstMetric(
+			prometheus.NewDesc(
+				prometheus.BuildFQName(namespace, memorySubsystem, "uma_malloc_memory_use"),
+				"memory-use",
+				umaMemoryLabelNames, nil,
+			), prometheus.GaugeValue,
+			float64(memstatBytes), memstatType,
+		)
+
+		ch <- prometheus.MustNewConstMetric(
+			prometheus.NewDesc(
+				prometheus.BuildFQName(namespace, memorySubsystem, "uma_malloc_requests"),
+				"requests",
+				umaMemoryLabelNames, nil,
+			), prometheus.GaugeValue,
+			float64(memstatAllocs), memstatType,
+		)
+
+		mtp = C.memstat_mtl_next(mtp)
+		if mtp == nil {
+			break
+		}
+	}
+
+	C.memstat_mtl_free(mtlp)
+
+	return
+}
+
+func updateUMAZoneStats(ch chan<- prometheus.Metric) {
+	// analogous to `vmstat -z --libxo json`
+	var r C.int
+
+	mtlp := C.memstat_mtl_alloc()
+	if mtlp == nil {
+		return
+	}
+
+	r = C.memstat_sysctl_uma(mtlp, 0)
+	if r < 0 {
+		return
+	}
+
+	umaZoneLabelNames := []string{"zone", "size", "limit"}
+
+	for mtp := C.memstat_mtl_first(mtlp); mtp != nil; {
+		memstatName := C.GoString(C.memstat_get_name(mtp))
+		memstatSize := uint64(C.memstat_get_size(mtp))
+		memstatSizeLabel := strconv.FormatUint(memstatSize, 10)
+		memstatLimit := uint64(C.memstat_get_countlimit(mtp))
+		memstatLimitLabel := strconv.FormatUint(memstatLimit, 10)
+
+		memstatUsed := uint64(C.memstat_get_count(mtp))
+		ch <- prometheus.MustNewConstMetric(
+			prometheus.NewDesc(
+				prometheus.BuildFQName(namespace, memorySubsystem, "uma_zone_used"),
+				"used",
+				umaZoneLabelNames, nil,
+			), prometheus.GaugeValue,
+			float64(memstatUsed), memstatName, memstatSizeLabel, memstatLimitLabel,
+		)
+
+		memstatFree := uint64(C.memstat_get_free(mtp))
+		ch <- prometheus.MustNewConstMetric(
+			prometheus.NewDesc(
+				prometheus.BuildFQName(namespace, memorySubsystem, "uma_zone_free"),
+				"free",
+				umaZoneLabelNames, nil,
+			), prometheus.GaugeValue,
+			float64(memstatFree), memstatName, memstatSizeLabel, memstatLimitLabel,
+		)
+
+		memstatRequests := uint64(C.memstat_get_numallocs(mtp))
+		ch <- prometheus.MustNewConstMetric(
+			prometheus.NewDesc(
+				prometheus.BuildFQName(namespace, memorySubsystem, "uma_zone_requests"),
+				"requests",
+				umaZoneLabelNames, nil,
+			), prometheus.GaugeValue,
+			float64(memstatRequests), memstatName, memstatSizeLabel, memstatLimitLabel,
+		)
+
+		memstatFail := uint64(C.memstat_get_failures(mtp))
+		ch <- prometheus.MustNewConstMetric(
+			prometheus.NewDesc(
+				prometheus.BuildFQName(namespace, memorySubsystem, "uma_zone_fail"),
+				"fail",
+				umaZoneLabelNames, nil,
+			), prometheus.GaugeValue,
+			float64(memstatFail), memstatName, memstatSizeLabel, memstatLimitLabel,
+		)
+
+		memstatSleep := uint64(C.memstat_get_sleeps(mtp))
+		ch <- prometheus.MustNewConstMetric(
+			prometheus.NewDesc(
+				prometheus.BuildFQName(namespace, memorySubsystem, "uma_zone_sleep"),
+				"sleep",
+				umaZoneLabelNames, nil,
+			), prometheus.GaugeValue,
+			float64(memstatSleep), memstatName, memstatSizeLabel, memstatLimitLabel,
+		)
+
+		memstatXDomain := uint64(C.memstat_get_xdomain(mtp))
+		ch <- prometheus.MustNewConstMetric(
+			prometheus.NewDesc(
+				prometheus.BuildFQName(namespace, memorySubsystem, "uma_zone_xdomain"),
+				"xdomain",
+				umaZoneLabelNames, nil,
+			), prometheus.GaugeValue,
+			float64(memstatXDomain), memstatName, memstatSizeLabel, memstatLimitLabel,
+		)
+
+		mtp = C.memstat_mtl_next(mtp)
+		if mtp == nil {
+			break
+		}
+	}
+
+	C.memstat_mtl_free(mtlp)
+
+	return
 }
