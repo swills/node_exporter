@@ -212,6 +212,7 @@ func updateUMAMallocStats(ch chan<- prometheus.Metric) {
 
 	for mtp := C.memstat_mtl_first(mtlp); mtp != nil; {
 		memstatType := C.GoString(C.memstat_get_name(mtp))
+
 		memstatInUse := uint64(C.memstat_get_count(mtp))
 		memstatBytes := uint64(C.memstat_get_bytes(mtp))
 		memstatAllocs := uint64(C.memstat_get_numallocs(mtp))
@@ -219,7 +220,7 @@ func updateUMAMallocStats(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(
 			prometheus.NewDesc(
 				prometheus.BuildFQName(namespace, memorySubsystem, "uma_malloc_in_use"),
-				"in use",
+				"current number of allocations",
 				umaMemoryLabelNames, nil,
 			), prometheus.GaugeValue,
 			float64(memstatInUse), memstatType,
@@ -228,7 +229,7 @@ func updateUMAMallocStats(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(
 			prometheus.NewDesc(
 				prometheus.BuildFQName(namespace, memorySubsystem, "uma_malloc_memory_use"),
-				"memory-use",
+				"current number of bytes allocated",
 				umaMemoryLabelNames, nil,
 			), prometheus.GaugeValue,
 			float64(memstatBytes), memstatType,
@@ -237,7 +238,7 @@ func updateUMAMallocStats(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(
 			prometheus.NewDesc(
 				prometheus.BuildFQName(namespace, memorySubsystem, "uma_malloc_requests"),
-				"requests",
+				"total number of allocations",
 				umaMemoryLabelNames, nil,
 			), prometheus.GaugeValue,
 			float64(memstatAllocs), memstatType,
@@ -272,69 +273,68 @@ func updateUMAZoneStats(ch chan<- prometheus.Metric) {
 
 	for mtp := C.memstat_mtl_first(mtlp); mtp != nil; {
 		memstatName := C.GoString(C.memstat_get_name(mtp))
-		memstatSize := uint64(C.memstat_get_size(mtp))
-		memstatSizeLabel := strconv.FormatUint(memstatSize, 10)
-		memstatLimit := uint64(C.memstat_get_countlimit(mtp))
-		memstatLimitLabel := strconv.FormatUint(memstatLimit, 10)
+		memstatSize := strconv.FormatUint(uint64(C.memstat_get_size(mtp)), 10)
+		memstatLimit := strconv.FormatUint(uint64(C.memstat_get_countlimit(mtp)), 10)
 
 		memstatUsed := uint64(C.memstat_get_count(mtp))
+		memstatFree := uint64(C.memstat_get_free(mtp))
+		memstatRequests := uint64(C.memstat_get_numallocs(mtp))
+		memstatFail := uint64(C.memstat_get_failures(mtp))
+		memstatSleep := uint64(C.memstat_get_sleeps(mtp))
+		memstatXDomain := uint64(C.memstat_get_xdomain(mtp))
+
 		ch <- prometheus.MustNewConstMetric(
 			prometheus.NewDesc(
 				prometheus.BuildFQName(namespace, memorySubsystem, "uma_zone_used"),
-				"used",
+				"current number of allocations",
 				umaZoneLabelNames, nil,
 			), prometheus.GaugeValue,
-			float64(memstatUsed), memstatName, memstatSizeLabel, memstatLimitLabel,
+			float64(memstatUsed), memstatName, memstatSize, memstatLimit,
 		)
 
-		memstatFree := uint64(C.memstat_get_free(mtp))
 		ch <- prometheus.MustNewConstMetric(
 			prometheus.NewDesc(
 				prometheus.BuildFQName(namespace, memorySubsystem, "uma_zone_free"),
-				"free",
+				"items in cache",
 				umaZoneLabelNames, nil,
 			), prometheus.GaugeValue,
-			float64(memstatFree), memstatName, memstatSizeLabel, memstatLimitLabel,
+			float64(memstatFree), memstatName, memstatSize, memstatLimit,
 		)
 
-		memstatRequests := uint64(C.memstat_get_numallocs(mtp))
 		ch <- prometheus.MustNewConstMetric(
 			prometheus.NewDesc(
 				prometheus.BuildFQName(namespace, memorySubsystem, "uma_zone_requests"),
-				"requests",
+				"allocations",
 				umaZoneLabelNames, nil,
 			), prometheus.GaugeValue,
-			float64(memstatRequests), memstatName, memstatSizeLabel, memstatLimitLabel,
+			float64(memstatRequests), memstatName, memstatSize, memstatLimit,
 		)
 
-		memstatFail := uint64(C.memstat_get_failures(mtp))
 		ch <- prometheus.MustNewConstMetric(
 			prometheus.NewDesc(
 				prometheus.BuildFQName(namespace, memorySubsystem, "uma_zone_fail"),
-				"fail",
+				"allocation failures",
 				umaZoneLabelNames, nil,
 			), prometheus.GaugeValue,
-			float64(memstatFail), memstatName, memstatSizeLabel, memstatLimitLabel,
+			float64(memstatFail), memstatName, memstatSize, memstatLimit,
 		)
 
-		memstatSleep := uint64(C.memstat_get_sleeps(mtp))
 		ch <- prometheus.MustNewConstMetric(
 			prometheus.NewDesc(
 				prometheus.BuildFQName(namespace, memorySubsystem, "uma_zone_sleep"),
-				"sleep",
+				"sleep on allocate",
 				umaZoneLabelNames, nil,
 			), prometheus.GaugeValue,
-			float64(memstatSleep), memstatName, memstatSizeLabel, memstatLimitLabel,
+			float64(memstatSleep), memstatName, memstatSize, memstatLimit,
 		)
 
-		memstatXDomain := uint64(C.memstat_get_xdomain(mtp))
 		ch <- prometheus.MustNewConstMetric(
 			prometheus.NewDesc(
 				prometheus.BuildFQName(namespace, memorySubsystem, "uma_zone_xdomain"),
-				"xdomain",
+				"cross domain sleeps",
 				umaZoneLabelNames, nil,
 			), prometheus.GaugeValue,
-			float64(memstatXDomain), memstatName, memstatSizeLabel, memstatLimitLabel,
+			float64(memstatXDomain), memstatName, memstatSize, memstatLimit,
 		)
 
 		mtp = C.memstat_mtl_next(mtp)
